@@ -1,0 +1,45 @@
+# Inspecting Jira Issues for AI Agents
+
+A Claude Code skill for reading Jira tickets *completely* — not just the summary, but attachments (screenshots, mockups), comments, linked issues, and custom fields — using `acli` plus a small keychain trick for downloading attachment bytes that the agent can actually view.
+
+## What problem this solves
+
+A Jira summary is a label, not a bug report. The actual repro lives in attachments, comments, and linked issues. AI agents that "work from the summary" guess at half the problem and waste a round-trip asking the human to paste a screenshot the agent could fetch itself.
+
+`acli jira workitem view` shows the issue's text but **has no `attachment download` subcommand**. Naive `curl` against `*.atlassian.net/rest/api/3/attachment/content/<id>` returns 403, and a Bearer-authenticated request with `Accept: image/png` returns 406. This skill bundles the working incantation.
+
+## What's in the skill
+
+| File | Purpose |
+|------|---------|
+| `SKILL.md` | The inspection workflow + four pitfalls of attachment download |
+| `download-jira-attachment.sh` | Working downloader: keychain → OAuth proxy → bytes on disk |
+
+## Requirements
+
+- macOS (uses the `security` CLI for keychain access)
+- `acli` installed and `acli auth login` run at least once
+- `python3` (for a one-line JSON parse)
+
+## Install
+
+```bash
+git clone https://github.com/sunfmin/inspecting-jira-issues ~/.claude/skills/inspecting-jira-issues
+cp ~/.claude/skills/inspecting-jira-issues/download-jira-attachment.sh ~/bin/
+```
+
+## Usage
+
+Once installed, just ask Claude Code naturally:
+
+```
+> Fix https://your-site.atlassian.net/browse/PROJ-1234
+> What does PROJ-1234 say?
+> Look at the screenshot in PROJ-1234 and tell me what's wrong
+```
+
+Claude will fetch the full issue JSON, download every attachment, view each image, walk linked issues and comments — then propose a fix backed by the actual ticket content.
+
+## License
+
+MIT
