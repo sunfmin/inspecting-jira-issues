@@ -22,13 +22,16 @@ This skill is the standard recipe for reading a Jira ticket completely from the 
 
 ## Inspection workflow
 
-The fast path is one command:
+The fast path is one command. **Use the absolute path** — the skill ships to `~/.claude/skills/inspecting-jira-issues/` and is not on `PATH` by default:
 
 ```bash
-JIRA_SITE=https://your-site.atlassian.net jira-to-markdown.py KGM-3320
+JIRA_SITE=https://your-site.atlassian.net \
+  ~/.claude/skills/inspecting-jira-issues/jira-to-markdown.py KGM-3320
 # → /tmp/jira/KGM-3320/ticket.md
 # → /tmp/jira/KGM-3320/attachments/*
 ```
+
+(Once you've symlinked it into `~/bin/` per the README, the bare `jira-to-markdown.py KGM-3320` form also works.)
 
 `jira-to-markdown.py` writes a self-contained directory: one `ticket.md`
 with **every populated field** rendered — header table covers all scalar
@@ -56,7 +59,7 @@ KEY=KGM-3320
 
 acli jira workitem view "$KEY" --fields '*all' --json     # full JSON
 acli jira workitem attachment list --key "$KEY" --json    # attachment IDs
-./download-jira-attachment.sh 188469 /tmp/$KEY.png        # one attachment
+~/.claude/skills/inspecting-jira-issues/download-jira-attachment.sh 188469 /tmp/$KEY.png
 acli jira workitem comment list --key "$KEY"              # comments alone
 ```
 
