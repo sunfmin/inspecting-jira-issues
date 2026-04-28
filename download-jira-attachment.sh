@@ -39,7 +39,12 @@ fi
 ATTACHMENT_ID=$1
 OUTPUT=$2
 
-# 1. Read the keychain entry's metadata to find the cloudId.
+# 1. Refresh the OAuth token if it has expired since the last acli call.
+#    Without this, a stale keychain token causes a 401 on the very first
+#    request after a long break.
+acli auth status >/dev/null 2>&1 || true
+
+# 2. Read the keychain entry's metadata to find the cloudId.
 #    The account name is literally `oauth:<cloudId>:<userId>`.
 META=$(security find-generic-password -s acli 2>/dev/null) || {
     echo "No acli OAuth keychain entry found. Run 'acli auth login' first." >&2

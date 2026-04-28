@@ -83,9 +83,19 @@ acli jira workitem comment list --key "$KEY"              # comments alone
 
 Both `jira-to-markdown.py` (full ticket dump) and `download-jira-attachment.sh` (one attachment) in this skill's directory bundle all four. Copy them to `$PATH` (e.g. `~/bin/`).
 
+## Prerequisites
+
+```bash
+brew tap atlassian/homebrew-acli
+brew install acli
+acli auth login        # one-time OAuth dance — also re-run if you change sites
+```
+
+The first `acli auth login` is what plants the OAuth token in the macOS keychain. Both scripts in this skill read from there.
+
 ## Token expiry
 
-Access tokens last ~1 hour. On `401`, run any `acli` command (e.g. `acli auth status`) to silently refresh, then re-run the script.
+Access tokens last ~1 hour. The scripts call `acli auth status` at startup to trigger a silent refresh, so the first run after a long break works without intervention. If `acli auth status` itself reports the refresh token has expired, re-run `acli auth login`.
 
 ## Common Mistakes
 

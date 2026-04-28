@@ -36,6 +36,19 @@ from pathlib import Path
 
 # ---------- keychain + auth ----------
 
+def acli_refresh_token() -> None:
+    """Run a no-op acli command so it refreshes the keychain token if expired.
+
+    Without this, a token that expired between sessions causes the first
+    REST call to fail with 401 — and the user has to manually run any acli
+    command to trigger a silent refresh and re-run this script.
+    """
+    subprocess.run(
+        ["acli", "auth", "status"],
+        capture_output=True, text=True,
+    )
+
+
 def acli_keychain_account() -> str:
     """Return the keychain account string, e.g. ``oauth:<cloudId>:<userId>``."""
     out = subprocess.run(
@@ -375,6 +388,7 @@ def main(argv: list[str]) -> int:
     att_dir = out_dir / "attachments"
     att_dir.mkdir(exist_ok=True)
 
+    acli_refresh_token()
     account = acli_keychain_account()
     cloud_id = cloud_id_from_account(account)
     token = acli_access_token()

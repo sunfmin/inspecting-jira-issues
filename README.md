@@ -19,8 +19,14 @@ A Jira summary is a label, not a bug report. The actual repro lives in attachmen
 ## Requirements
 
 - macOS (uses the `security` CLI for keychain access)
-- `acli` installed and `acli auth login` run at least once
 - `python3` (for a one-line JSON parse)
+- `acli` installed and authenticated:
+
+```bash
+brew tap atlassian/homebrew-acli
+brew install acli
+acli auth login
+```
 
 ## Install
 
