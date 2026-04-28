@@ -13,7 +13,8 @@ A Jira summary is a label, not a bug report. The actual repro lives in attachmen
 | File | Purpose |
 |------|---------|
 | `SKILL.md` | The inspection workflow + four pitfalls of attachment download |
-| `download-jira-attachment.sh` | Working downloader: keychain → OAuth proxy → bytes on disk |
+| `jira-to-markdown.py` | One-shot: writes `ticket.md` + downloads every attachment, ADF→Markdown |
+| `download-jira-attachment.sh` | Single-attachment downloader: keychain → OAuth proxy → bytes on disk |
 
 ## Requirements
 
@@ -25,6 +26,7 @@ A Jira summary is a label, not a bug report. The actual repro lives in attachmen
 
 ```bash
 git clone https://github.com/sunfmin/inspecting-jira-issues ~/.claude/skills/inspecting-jira-issues
+cp ~/.claude/skills/inspecting-jira-issues/jira-to-markdown.py ~/bin/
 cp ~/.claude/skills/inspecting-jira-issues/download-jira-attachment.sh ~/bin/
 ```
 

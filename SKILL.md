@@ -22,23 +22,34 @@ This skill is the standard recipe for reading a Jira ticket completely from the 
 
 ## Inspection workflow
 
+The fast path is one command:
+
+```bash
+JIRA_SITE=https://your-site.atlassian.net jira-to-markdown.py KGM-3320
+# → /tmp/jira/KGM-3320/ticket.md
+# → /tmp/jira/KGM-3320/attachments/*
+```
+
+`jira-to-markdown.py` writes a self-contained directory: one `ticket.md`
+(header table, full description, attachments list, linked issues, comments)
+with every attachment downloaded under `attachments/` and referenced inline
+as `![alt](attachments/foo.png)`. Read `ticket.md`, then follow the image
+links with the agent's image-reading tool.
+
+The script handles the non-obvious bits — keychain-stored OAuth token,
+ADF→Markdown conversion (paragraphs, lists, headings, code, links, marks,
+mentions, panels, tables, media), filename-collision disambiguation, and
+the `Accept: */*` quirk that bypasses `406 Not Acceptable`.
+
+If you only need one piece, the lower-level commands still work:
+
 ```bash
 KEY=KGM-3320
 
-# 1. Full JSON — description, status, comments, attachments, issuelinks, custom fields
-acli jira workitem view "$KEY" --fields '*all' --json > /tmp/$KEY.json
-
-# 2. Attachments
-acli jira workitem attachment list --key "$KEY" --json
-./download-jira-attachment.sh 188469 /tmp/$KEY.png      # repeat per attachment
-
-# 3. Read every downloaded image with the agent's image-reading tool
-
-# 4. Linked issues — duplicates, blockers, related
-jq '.fields.issuelinks[] | {type: .type.name, key: (.outwardIssue.key // .inwardIssue.key)}' /tmp/$KEY.json
-
-# 5. Comments — repros and decisions live here
-acli jira workitem comment list --key "$KEY"
+acli jira workitem view "$KEY" --fields '*all' --json     # full JSON
+acli jira workitem attachment list --key "$KEY" --json    # attachment IDs
+./download-jira-attachment.sh 188469 /tmp/$KEY.png        # one attachment
+acli jira workitem comment list --key "$KEY"              # comments alone
 ```
 
 ## Where things hide
@@ -62,7 +73,7 @@ acli jira workitem comment list --key "$KEY"
 | Where's the cloudId? | The keychain account name is literally `oauth:<cloudId>:<userId>`. No need to call `getAccessibleAtlassianResources`. |
 | Why does my request 406? | `Accept: image/png` triggers 406 ("Acceptable representations: [application/json]"). Use `Accept: */*` (or omit `Accept`). |
 
-`download-jira-attachment.sh` in this skill's directory bundles all four. Copy it to `$PATH` (e.g. `~/bin/`).
+Both `jira-to-markdown.py` (full ticket dump) and `download-jira-attachment.sh` (one attachment) in this skill's directory bundle all four. Copy them to `$PATH` (e.g. `~/bin/`).
 
 ## Token expiry
 
