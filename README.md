@@ -24,10 +24,36 @@ A Jira summary is a label, not a bug report. The actual repro lives in attachmen
 
 ## Install
 
+Use the [`skills`](https://www.npmjs.com/package/skills) CLI from vercel-labs:
+
 ```bash
-git clone https://github.com/sunfmin/inspecting-jira-issues ~/.claude/skills/inspecting-jira-issues
-cp ~/.claude/skills/inspecting-jira-issues/jira-to-markdown.py ~/bin/
-cp ~/.claude/skills/inspecting-jira-issues/download-jira-attachment.sh ~/bin/
+# user-level (available in every project)
+npx skills add sunfmin/inspecting-jira-issues -g
+
+# project-level (drops into ./.claude/skills/)
+npx skills add sunfmin/inspecting-jira-issues
+```
+
+Then put the helper scripts on `$PATH` so Claude can invoke them directly:
+
+```bash
+ln -s ~/.claude/skills/inspecting-jira-issues/jira-to-markdown.py ~/bin/
+ln -s ~/.claude/skills/inspecting-jira-issues/download-jira-attachment.sh ~/bin/
+```
+
+## Updating / publishing changes
+
+This repo is the upstream that `skills add` reads from — there's no separate registry. To publish a fix:
+
+```bash
+git commit -am "…"
+git push origin main
+```
+
+Existing installs pick up the change with:
+
+```bash
+npx skills update inspecting-jira-issues
 ```
 
 ## Usage

@@ -31,10 +31,18 @@ JIRA_SITE=https://your-site.atlassian.net jira-to-markdown.py KGM-3320
 ```
 
 `jira-to-markdown.py` writes a self-contained directory: one `ticket.md`
-(header table, full description, attachments list, linked issues, comments)
-with every attachment downloaded under `attachments/` and referenced inline
-as `![alt](attachments/foo.png)`. Read `ticket.md`, then follow the image
-links with the agent's image-reading tool.
+with **every populated field** rendered — header table covers all scalar
+fields (standard + custom, labels resolved via `?expand=names`), and every
+ADF-doc field gets its own `## Section` (Description, Environment, plus any
+ADF custom fields). Attachments, linked issues, sub-tasks, and comments
+follow. Every attachment is downloaded under `attachments/` and referenced
+inline as `![alt](attachments/foo.png)`.
+
+Why exhaustive: the actual repro on TPT bug tickets often lives in
+`fields.environment` (発生工程, 再現手順, プラットフォーム, etc.), which
+neither the description nor `acli workitem view` shows by default. Same
+goes for custom fields like Severity, Urgency, Epic Link. Curating fields
+ahead of time means rediscovering missing ones one ticket at a time.
 
 The script handles the non-obvious bits — keychain-stored OAuth token,
 ADF→Markdown conversion (paragraphs, lists, headings, code, links, marks,

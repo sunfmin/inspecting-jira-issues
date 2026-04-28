@@ -292,6 +292,76 @@ def cell(s: str) -> str:
     return (s or "").replace("|", "\\|").replace("\n", " ").strip()
 
 
+ISO_DT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
+
+
+def render_scalar_field(v) -> str | None:
+    """Render an arbitrary Jira field value as a one-line markdown-table-safe
+    string, or return None if the value is empty / not meaningful as a scalar.
+
+    ADF doc values return None — the caller renders them as their own section.
+    """
+    if v is None or v == "" or v == [] or v == {} or v == "{}":
+        return None
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v) if v != 0 else None
+    if isinstance(v, str):
+        return fmt_dt(v) if ISO_DT.match(v) else v
+    if isinstance(v, list):
+        parts = [render_scalar_field(x) for x in v]
+        parts = [p for p in parts if p]
+        return ", ".join(parts) if parts else None
+    if isinstance(v, dict):
+        # ADF doc → caller handles as its own section
+        if v.get("type") == "doc":
+            return None
+        # Common Jira shapes: option, user, named entity, issue ref
+        for k in ("value", "displayName", "name"):
+            if v.get(k):
+                return str(v[k])
+        if v.get("key"):
+            ksum = (v.get("fields") or {}).get("summary")
+            return f"{v['key']}: {ksum}" if ksum else str(v["key"])
+        if v.get("emailAddress"):
+            return str(v["emailAddress"])
+        # Pure-zero composites (progress, aggregateprogress, workratio carriers)
+        scalars = [x for x in v.values() if isinstance(x, (int, float, bool))]
+        if scalars and all(x == 0 or x is False for x in scalars):
+            non_scalars = [x for x in v.values() if not isinstance(x, (int, float, bool))]
+            if not non_scalars or all(x in (None, "", [], {}, "{}") for x in non_scalars):
+                return None
+        return None  # unknown / not worth rendering as scalar
+    return None
+
+
+# Fields that have their own dedicated section in the output, so should NOT
+# also appear in the catch-all field table or as auto-rendered ADF sections.
+DEDICATED_FIELDS = {
+    "summary",        # used as title
+    "description",    # ## Description
+    "attachment",     # ## Attachments
+    "comment",        # ## Comments
+    "issuelinks",     # ## Linked Issues
+    "subtasks",       # ## Subtasks
+}
+
+# Pure plumbing — never useful to a human reader.
+SKIP_FIELDS = {"expand", "self", "_links"}
+
+
+def is_internal_label(label: str) -> bool:
+    """Skip labels that are pure-internal Jira machinery."""
+    if not label:
+        return True
+    if label.startswith("[CHART]"):
+        return True
+    if label in {"Rank"}:
+        return True
+    return False
+
+
 # ---------- main ----------
 
 def main(argv: list[str]) -> int:
@@ -345,10 +415,6 @@ def main(argv: list[str]) -> int:
 
     ctx = {"media_to_filename": media_to_filename}
 
-    # Description
-    desc_node = fields.get("description")
-    desc_md = adf_to_md(desc_node, ctx).rstrip() if desc_node else "_(no description)_"
-
     # Comments
     comments = ((fields.get("comment") or {}).get("comments")) or []
     comments_md_parts: list[str] = []
@@ -375,9 +441,54 @@ def main(argv: list[str]) -> int:
         tsum = ((target.get("fields") or {}).get("summary")) or ""
         links_md.append(f"- {rel} **{tkey}**: {tsum}")
 
-    # Custom-fields-of-interest: priority/criticality where present
-    crit = fields.get("customfield_10063")
-    crit_str = (crit or {}).get("value") if isinstance(crit, dict) else None
+    # Subtasks
+    subtasks = fields.get("subtasks") or []
+    subtasks_md: list[str] = []
+    for st in subtasks:
+        skey = st.get("key", "")
+        sf = st.get("fields") or {}
+        ssum = sf.get("summary", "")
+        sstat = ((sf.get("status") or {}).get("name")) or ""
+        subtasks_md.append(f"- **{skey}** ({sstat}): {ssum}")
+
+    # Walk every populated field once, route into:
+    #   - scalar_rows: rendered into the header table
+    #   - adf_sections: rendered as their own ## section
+    # Use the names map (from ?expand=names) to get human labels — falls back
+    # to the field id (e.g. customfield_10063) when no label is present.
+    names_map = issue.get("names") or {}
+
+    def label_for(fid: str) -> str:
+        return names_map.get(fid) or fid
+
+    scalar_rows: list[tuple[str, str]] = []
+    adf_sections: list[tuple[str, str]] = []
+
+    for fid, val in fields.items():
+        if fid in DEDICATED_FIELDS or fid in SKIP_FIELDS:
+            continue
+        label = label_for(fid)
+        if is_internal_label(label):
+            continue
+        # ADF doc → its own section (description, environment, custom-field ADFs)
+        if isinstance(val, dict) and val.get("type") == "doc":
+            md = adf_to_md(val, ctx).rstrip()
+            if md:
+                adf_sections.append((label, md))
+            continue
+        rendered = render_scalar_field(val)
+        if rendered:
+            scalar_rows.append((label, rendered))
+    scalar_rows.sort(key=lambda r: r[0].lower())
+    adf_sections.sort(key=lambda r: r[0].lower())
+
+    # Always render Description first, even when empty, so readers know it was
+    # checked. Environment commonly holds the actual repro on TPT tickets;
+    # render it second when present.
+    desc_node = fields.get("description")
+    desc_md = adf_to_md(desc_node, ctx).rstrip() if desc_node else "_(no description)_"
+    env_node = fields.get("environment")
+    env_md = adf_to_md(env_node, ctx).rstrip() if env_node else ""
 
     # Site URL for browse link — derive from accessible resources isn't free,
     # so the URL field is best-effort: read JIRA_SITE env if set, or skip.
@@ -391,21 +502,26 @@ def main(argv: list[str]) -> int:
         parts.append(f"[{browse_url}]({browse_url})\n")
     parts.append("| Field | Value |")
     parts.append("|-------|-------|")
-    parts.append(f"| Type | {cell((fields.get('issuetype') or {}).get('name',''))} |")
-    parts.append(f"| Status | {cell((fields.get('status') or {}).get('name',''))} |")
-    parts.append(f"| Priority | {cell((fields.get('priority') or {}).get('name',''))} |")
-    if crit_str:
-        parts.append(f"| Criticality | {cell(crit_str)} |")
-    parts.append(f"| Reporter | {cell(fmt_user(fields.get('reporter')))} |")
-    parts.append(f"| Assignee | {cell(fmt_user(fields.get('assignee')))} |")
-    parts.append(f"| Created | {cell(fmt_dt(fields.get('created')))} |")
-    parts.append(f"| Updated | {cell(fmt_dt(fields.get('updated')))} |")
-    if fields.get("labels"):
-        parts.append(f"| Labels | {cell(', '.join(fields['labels']))} |")
+    for lbl, val in scalar_rows:
+        parts.append(f"| {cell(lbl)} | {cell(val)} |")
     parts.append("")
     parts.append("## Description\n")
     parts.append(desc_md)
     parts.append("")
+
+    if env_md:
+        parts.append("## Environment\n")
+        parts.append(env_md)
+        parts.append("")
+
+    # Any other ADF fields (besides description/environment, which we already
+    # emitted in fixed order above)
+    for lbl, md in adf_sections:
+        if lbl.lower() in {"description", "environment"}:
+            continue
+        parts.append(f"## {lbl}\n")
+        parts.append(md)
+        parts.append("")
 
     if attachments:
         parts.append("## Attachments\n")
@@ -418,6 +534,11 @@ def main(argv: list[str]) -> int:
     if links_md:
         parts.append("## Linked Issues\n")
         parts.extend(links_md)
+        parts.append("")
+
+    if subtasks_md:
+        parts.append("## Subtasks\n")
+        parts.extend(subtasks_md)
         parts.append("")
 
     parts.append(f"## Comments ({len(comments)})\n")
