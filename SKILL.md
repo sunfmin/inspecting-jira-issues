@@ -29,7 +29,14 @@ JIRA_SITE=https://your-site.atlassian.net \
   ~/.claude/skills/inspecting-jira-issues/jira-to-markdown.py KGM-3320
 # → /tmp/jira/KGM-3320/ticket.md
 # → /tmp/jira/KGM-3320/attachments/*
+# → /tmp/jira/KGM-3320/subtasks/<CHILD-KEY>/...   (every child, recursively)
 ```
+
+By default it also downloads **every sub-ticket recursively** — both classic
+sub-tasks and parent/epic children (found via a `parent = <KEY>` search, so
+epic children that aren't in the `subtasks` field are still pulled). Each
+child is a full dump under `subtasks/<KEY>/`, with its own `subtasks/` for
+grandchildren. Pass `--no-subtasks` to fetch only the top issue.
 
 (Once you've symlinked it into `~/bin/` per the README, the bare `jira-to-markdown.py KGM-3320` form also works.)
 
@@ -39,7 +46,8 @@ fields (standard + custom, labels resolved via `?expand=names`), and every
 ADF-doc field gets its own `## Section` (Description, Environment, plus any
 ADF custom fields). Attachments, linked issues, sub-tasks, and comments
 follow. Every attachment is downloaded under `attachments/` and referenced
-inline as `![alt](attachments/foo.png)`.
+inline as `![alt](attachments/foo.png)`, and every sub-ticket is downloaded
+recursively under `subtasks/` (unless `--no-subtasks` is passed).
 
 Why exhaustive: the actual repro on TPT bug tickets often lives in
 `fields.environment` (発生工程, 再現手順, プラットフォーム, etc.), which
@@ -95,6 +103,23 @@ acli auth login        # one-time OAuth dance — also re-run if you change site
 ```
 
 The first `acli auth login` is what plants the OAuth token in the macOS keychain. Both scripts in this skill read from there.
+
+### Optional: Excel attachment parsing
+
+If a ticket attaches an `.xlsx` / `.xls` / `.xlsm` file, `jira-to-markdown.py`
+parses it to Markdown (per-sheet PNG + extracted text) via the
+**xlsx-to-markdown** skill, writing it next to the file under
+`attachments/<stem>-xlsx/` and linking it from the Attachments section. This
+is best-effort: if the skill (or its CLI deps) isn't installed, the dump still
+completes and just notes the skip on stderr. To enable it:
+
+```bash
+npx skills add coolbit/excel-to-markdown      # installs as xlsx-to-markdown
+brew install poppler imagemagick              # + LibreOffice (soffice) — see that skill's README
+```
+
+The converter is auto-located in `~/.claude/skills/` or `~/.agents/skills/`
+(override with the `XLSX_TO_MD` env var).
 
 ## Token expiry
 

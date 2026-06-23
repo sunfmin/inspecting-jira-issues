@@ -3,7 +3,7 @@
 jira-to-markdown.py — fetch a Jira ticket, render it as a self-contained
 markdown directory with all attachments downloaded inline.
 
-Usage: jira-to-markdown.py <ISSUE-KEY> [<OUTPUT-DIR>]
+Usage: jira-to-markdown.py <ISSUE-KEY> [<OUTPUT-DIR>] [--no-subtasks]
 
 Default OUTPUT-DIR: /tmp/jira/<ISSUE-KEY>
 
@@ -13,6 +13,17 @@ Produces:
     attachments/
       image-foo.png
       ...
+    subtasks/                # every sub-task / child issue, recursively
+      <CHILD-KEY>/
+        ticket.md
+        attachments/
+        subtasks/            # grandchildren, if any
+      ...
+
+By default ALL sub-tickets are downloaded recursively — both classic
+sub-tasks (the issue's ``subtasks`` field) and parent/epic children (found
+via a ``parent = <KEY>`` search). Pass --no-subtasks to fetch only the top
+issue.
 
 Reads acli's OAuth token from the macOS keychain (no `acli auth login`
 prompt). On 401 (expired token), run `acli auth status` to refresh and
@@ -81,8 +92,14 @@ def cloud_id_from_account(account: str) -> str:
     return parts[1]
 
 
-def jira_get(cloud_id: str, token: str, path: str) -> bytes:
-    """GET a path under the OAuth proxy, returning raw bytes."""
+def jira_get(cloud_id: str, token: str, path: str, fatal: bool = True) -> bytes | None:
+    """GET a path under the OAuth proxy, returning raw bytes.
+
+    On HTTP error: exit the script (``fatal=True``, the default) or return
+    ``None`` (``fatal=False``) — the latter for best-effort calls such as the
+    child-issue search, where a missing/forbidden result shouldn't abort the
+    whole dump.
+    """
     url = f"https://api.atlassian.com/ex/jira/{cloud_id}{path}"
     req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {token}",
@@ -93,7 +110,9 @@ def jira_get(cloud_id: str, token: str, path: str) -> bytes:
             return r.read()
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
-        sys.exit(f"HTTP {e.code} GET {path}\n{body}")
+        if fatal:
+            sys.exit(f"HTTP {e.code} GET {path}\n{body}")
+        return None
 
 
 # ---------- ADF → Markdown ----------
@@ -375,23 +394,74 @@ def is_internal_label(label: str) -> bool:
     return False
 
 
+# ---------- excel attachments ----------
+
+EXCEL_EXTS = (".xlsx", ".xlsm", ".xls")
+
+
+def find_xlsx_converter() -> Path | None:
+    """Locate the xlsx-to-markdown skill's converter script.
+
+    Install it with: ``npx skills add coolbit/excel-to-markdown``.
+    Override the location with the ``XLSX_TO_MD`` env var if needed.
+    """
+    env = os.environ.get("XLSX_TO_MD")
+    candidates = [Path(env)] if env else []
+    candidates += [
+        Path.home() / ".claude/skills/xlsx-to-markdown/scripts/xlsx_to_md.py",
+        Path.home() / ".agents/skills/xlsx-to-markdown/scripts/xlsx_to_md.py",
+    ]
+    for c in candidates:
+        try:
+            if c.is_file():
+                return c
+        except OSError:
+            pass
+    return None
+
+
+def convert_excel(xlsx_path: Path, att_dir: Path) -> str | None:
+    """Parse an Excel attachment to Markdown via the xlsx-to-markdown skill.
+
+    Writes ``<att_dir>/<stem>-xlsx/<name>.md`` + per-sheet PNGs and returns the
+    ticket.md-relative path to that markdown. Idempotent (skips if already
+    converted). Never fatal — if the skill is missing or conversion fails, a
+    note goes to stderr and the dump continues without the parsed view.
+    """
+    out_dir = att_dir / f"{xlsx_path.stem}-xlsx"
+    existing = sorted(out_dir.glob("*.md")) if out_dir.exists() else []
+    if existing:
+        return str(existing[0].relative_to(att_dir.parent))
+
+    script = find_xlsx_converter()
+    if script is None:
+        print(f"  xlsx-to-markdown skill not found — skipping {xlsx_path.name}. "
+              "Install: npx skills add coolbit/excel-to-markdown", file=sys.stderr)
+        return None
+    try:
+        subprocess.run(
+            [sys.executable, str(script), str(xlsx_path), str(out_dir)],
+            check=True, capture_output=True, text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        tail = (e.stderr or e.stdout or "").strip().splitlines()
+        why = tail[-1] if tail else f"exit {e.returncode}"
+        print(f"  xlsx conversion failed for {xlsx_path.name}: {why}", file=sys.stderr)
+        return None
+    mds = sorted(out_dir.glob("*.md"))
+    return str(mds[0].relative_to(att_dir.parent)) if mds else None
+
+
 # ---------- main ----------
 
-def main(argv: list[str]) -> int:
-    if len(argv) < 2:
-        print(__doc__.strip(), file=sys.stderr)
-        return 1
+def render_issue(key: str, out_dir: Path, cloud_id: str, token: str) -> dict:
+    """Fetch one issue and write ``<out_dir>/ticket.md`` + ``attachments/``.
 
-    key = argv[1].strip()
-    out_dir = Path(argv[2]) if len(argv) >= 3 else Path(f"/tmp/jira/{key}")
+    Returns the parsed issue dict so the caller can discover child issues.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     att_dir = out_dir / "attachments"
     att_dir.mkdir(exist_ok=True)
-
-    acli_refresh_token()
-    account = acli_keychain_account()
-    cloud_id = cloud_id_from_account(account)
-    token = acli_access_token()
 
     # Fetch the issue with everything we care about.
     raw = jira_get(cloud_id, token,
@@ -403,6 +473,7 @@ def main(argv: list[str]) -> int:
     # to the local filename. Different ADF versions reference media by either.
     attachments = fields.get("attachment") or []
     media_to_filename: dict[str, str] = {}
+    excel_md: dict[str, str] = {}   # filename -> ticket.md-relative parsed markdown
     seen_filenames: set[str] = set()
     for att in attachments:
         att_id = str(att.get("id", ""))
@@ -426,6 +497,12 @@ def main(argv: list[str]) -> int:
         media_to_filename[filename] = filename
         # ADF media nodes carry a UUID separate from the numeric attachment id;
         # we resolve by alt-text fallback when no UUID match exists.
+
+        # Excel attachments: parse to Markdown via the xlsx-to-markdown skill.
+        if filename.lower().endswith(EXCEL_EXTS):
+            rel = convert_excel(local_path, att_dir)
+            if rel:
+                excel_md[filename] = rel
 
     ctx = {"media_to_filename": media_to_filename}
 
@@ -542,7 +619,11 @@ def main(argv: list[str]) -> int:
         for att in attachments:
             fn = media_to_filename.get(str(att.get("id", "")), att.get("filename", ""))
             size = att.get("size", 0)
-            parts.append(f"- [{fn}](attachments/{urllib.parse.quote(fn)}) — {size} bytes")
+            line = f"- [{fn}](attachments/{urllib.parse.quote(fn)}) — {size} bytes"
+            rel = excel_md.get(fn)
+            if rel:
+                line += f" → parsed: [{Path(rel).name}]({urllib.parse.quote(rel)})"
+            parts.append(line)
         parts.append("")
 
     if links_md:
@@ -565,6 +646,76 @@ def main(argv: list[str]) -> int:
     out_file.write_text("\n".join(parts) + "\n")
 
     print(f"Wrote {out_file} ({len(attachments)} attachment(s))", file=sys.stderr)
+    return issue
+
+
+def collect_child_keys(issue: dict, cloud_id: str, token: str) -> list[str]:
+    """All child-issue keys: classic sub-tasks plus parent/epic children.
+
+    The ``subtasks`` field only carries classic sub-task issue types; epic /
+    parent children are found with a best-effort ``parent = <KEY>`` search
+    (non-fatal — older Jira, a missing parent field, or no permission just
+    yields nothing extra).
+    """
+    fields = issue.get("fields") or {}
+    keys = [st["key"] for st in (fields.get("subtasks") or []) if st.get("key")]
+
+    pkey = issue.get("key")
+    if pkey:
+        jql = urllib.parse.quote(f"parent = {pkey} ORDER BY created ASC")
+        raw = jira_get(
+            cloud_id, token,
+            f"/rest/api/3/search/jql?jql={jql}&fields=key&maxResults=200",
+            fatal=False,
+        )
+        if raw:
+            try:
+                for iss in (json.loads(raw).get("issues") or []):
+                    if iss.get("key"):
+                        keys.append(iss["key"])
+            except (ValueError, KeyError):
+                pass
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for k in keys:
+        if k and k not in seen:
+            seen.add(k)
+            ordered.append(k)
+    return ordered
+
+
+def main(argv: list[str]) -> int:
+    positional = [a for a in argv[1:] if not a.startswith("-")]
+    flags = {a for a in argv[1:] if a.startswith("-")}
+    if not positional:
+        print(__doc__.strip(), file=sys.stderr)
+        return 1
+    recurse = "--no-subtasks" not in flags
+
+    key = positional[0].strip()
+    out_dir = Path(positional[1]) if len(positional) >= 2 else Path(f"/tmp/jira/{key}")
+
+    acli_refresh_token()
+    account = acli_keychain_account()
+    cloud_id = cloud_id_from_account(account)
+    token = acli_access_token()
+
+    visited: set[str] = set()
+
+    def walk(k: str, d: Path) -> None:
+        if k in visited:          # guard against cycles / shared children
+            return
+        visited.add(k)
+        issue = render_issue(k, d, cloud_id, token)
+        if recurse:
+            for child in collect_child_keys(issue, cloud_id, token):
+                walk(child, d / "subtasks" / child)
+
+    walk(key, out_dir)
+
+    if len(visited) > 1:
+        print(f"Wrote {len(visited)} ticket(s) under {out_dir}", file=sys.stderr)
     print(out_dir)
     return 0
 
