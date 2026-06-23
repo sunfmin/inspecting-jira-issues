@@ -461,7 +461,8 @@ def render_issue(key: str, out_dir: Path, cloud_id: str, token: str) -> dict:
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     att_dir = out_dir / "attachments"
-    att_dir.mkdir(exist_ok=True)
+    # Created lazily below — only if the issue actually has attachments, so
+    # attachment-free issues don't leave an empty attachments/ directory.
 
     # Fetch the issue with everything we care about.
     raw = jira_get(cloud_id, token,
@@ -472,6 +473,8 @@ def render_issue(key: str, out_dir: Path, cloud_id: str, token: str) -> dict:
     # Download attachments and build a map from media-id (UUID) and numeric-id
     # to the local filename. Different ADF versions reference media by either.
     attachments = fields.get("attachment") or []
+    if attachments:
+        att_dir.mkdir(exist_ok=True)
     media_to_filename: dict[str, str] = {}
     excel_md: dict[str, str] = {}   # filename -> ticket.md-relative parsed markdown
     seen_filenames: set[str] = set()
